@@ -1,0 +1,51 @@
+.feedback-page {
+  min-height: 100vh;
+  padding: 100px 40px 40px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.feedback-content {
+  max-width: 900px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.overall-score {
+  font-size: 48px;
+  font-weight: 800;
+  color: white;
+  margin-bottom: 60px;
+  text-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.score-value {
+  color: #38ef7d;
+  font-size: 56px;
+}
+
+.radar-container {
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+  padding: 40px;
+  margin-bottom: 40px;
+}
+
+.line-by-line-button {
+  padding: 18px 48px;
+  font-size: 18px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+  color: white;
+  border: none;
+  border-radius: 50px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.line-by-line-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(17, 153, 142, 0.4);
+}
