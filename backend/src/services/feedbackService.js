@@ -33,14 +33,45 @@ class FeedbackService {
   }
 
   async generateOverallFeedback(transcript, scenario) {
+    // Calculate speech analytics from transcript metadata
+    const userMessages = transcript.filter(t => t.speaker === 'user');
+    const avgConfidence = userMessages.length > 0
+      ? userMessages.reduce((sum, msg) => sum + (msg.confidence || 0), 0) / userMessages.length
+      : 0;
+    const avgVolume = userMessages.length > 0
+      ? userMessages.reduce((sum, msg) => sum + (msg.volume || 0), 0) / userMessages.length
+      : 0;
+    
     const conversationText = transcript
-      .map(t => `${t.speaker === 'user' ? 'User' : 'AI'}: ${t.text}`)
+      .map(t => {
+        let line = `${t.speaker === 'user' ? 'User' : 'AI'}: ${t.text}`;
+        
+        // Add speech analytics for user messages
+        if (t.speaker === 'user' && (t.confidence || t.volume)) {
+          const metadata = [];
+          if (t.confidence !== undefined) {
+            metadata.push(`confidence: ${t.confidence.toFixed(2)}`);
+          }
+          if (t.volume !== undefined) {
+            metadata.push(`volume: ${t.volume.toFixed(1)}`);
+          }
+          if (metadata.length > 0) {
+            line += ` [${metadata.join(', ')}]`;
+          }
+        }
+        
+        return line;
+      })
       .join('\n');
 
     const prompt = `Analyze this conversation and provide scores:
 
 Conversation:
 ${conversationText}
+
+Speech Analytics Summary:
+- Average Speech Confidence: ${avgConfidence.toFixed(2)} (0.0-1.0, where >0.85 is excellent)
+- Average Volume Level: ${avgVolume.toFixed(1)} (0-100, where 30-70 is conversational)
 
 Provide your analysis as JSON with this exact format:
 {
@@ -52,16 +83,27 @@ Provide your analysis as JSON with this exact format:
     "respect": <number 1-6>,
     "attentiveness": <number 1-6>,
     "empathy": <number 1-6>
+  },
+  "speechMetrics": {
+    "clarity": <number 0-100 based on confidence scores>,
+    "volumeAppropriacy": <number 0-100 based on volume levels>,
+    "consistencyScore": <number 0-100 based on variation in metrics>
   }
 }
 
 Evaluate based on:
-- Confidence: assertiveness, clarity, self-assurance
+- Confidence: assertiveness, clarity, self-assurance (use speech confidence and volume as indicators)
 - Tact: diplomacy, sensitivity in difficult situations
 - Friendliness: warmth, approachability
 - Respect: politeness, consideration
 - Attentiveness: active listening, engagement
-- Empathy: understanding, emotional awareness`;
+- Empathy: understanding, emotional awareness
+
+Speech Analysis Guidelines:
+- Low confidence scores (<0.7) suggest unclear speech or hesitation
+- Very low volume (<20) suggests lack of assertiveness
+- Very high volume (>80) may indicate aggression
+- Consistent metrics suggest comfort and confidence`;
 
     const response = await this.openai.chat.completions.create({
       model: 'gpt-4-turbo-preview',
@@ -83,15 +125,28 @@ Evaluate based on:
 
     const feedbackPromises = userMessages.map(async (message, index) => {
       const context = this.getMessageContext(transcript, message);
+      
+      // Add speech analytics to the prompt if available
+      let speechInfo = '';
+      if (message.confidence !== undefined || message.volume !== undefined) {
+        const parts = [];
+        if (message.confidence !== undefined) {
+          parts.push(`Speech confidence: ${message.confidence.toFixed(2)}`);
+        }
+        if (message.volume !== undefined) {
+          parts.push(`Volume level: ${message.volume.toFixed(1)}`);
+        }
+        speechInfo = `\nSpeech Analytics: ${parts.join(', ')}`;
+      }
 
       const prompt = `Provide brief (one sentence) constructive feedback on this user message:
 
 Context:
 ${context}
 
-User message: "${message.text}"
+User message: "${message.text}"${speechInfo}
 
-Give specific, actionable feedback focusing on communication skills. Keep it to ONE sentence.`;
+Give specific, actionable feedback focusing on communication skills. If speech metrics indicate low confidence or inappropriate volume, mention it. Keep it to ONE sentence.`;
 
       try {
         const response = await this.openai.chat.completions.create({
@@ -103,13 +158,17 @@ Give specific, actionable feedback focusing on communication skills. Keep it to 
 
         return {
           text: message.text,
-          feedback: response.choices[0].message.content.trim()
+          feedback: response.choices[0].message.content.trim(),
+          confidence: message.confidence,
+          volume: message.volume
         };
       } catch (error) {
         console.error('Error generating feedback for message:', error);
         return {
           text: message.text,
-          feedback: 'Good communication.'
+          feedback: 'Good communication.',
+          confidence: message.confidence,
+          volume: message.volume
         };
       }
     });

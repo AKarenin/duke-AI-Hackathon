@@ -25,6 +25,16 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'SocialGym backend is running' });
 });
 
+// Debug endpoint
+app.get('/debug', (req, res) => {
+  res.json({
+    deepgramKey: !!process.env.DEEPGRAM_API_KEY,
+    openaiKey: !!process.env.OPENAI_API_KEY,
+    elevenlabsKey: !!process.env.ELEVENLABS_API_KEY,
+    heygenKey: !!process.env.HEYGEN_API_KEY
+  });
+});
+
 // Socket.IO connection handling
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);

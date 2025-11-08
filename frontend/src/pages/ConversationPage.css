@@ -91,3 +91,129 @@
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(238, 9, 121, 0.4);
 }
+
+.avatar-indicator {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 12px 24px;
+  border-radius: 25px;
+  font-size: 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.avatar-indicator.talking {
+  background: rgba(56, 239, 125, 0.3);
+  border: 2px solid #38ef7d;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.avatar-indicator.idle {
+  background: rgba(102, 126, 234, 0.3);
+  border: 2px solid #667eea;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.05);
+  }
+}
+
+.avatar-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.3) 0%, rgba(118, 75, 162, 0.3) 100%);
+  transition: all 0.3s ease;
+}
+
+.avatar-circle {
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s ease;
+}
+
+.avatar-placeholder.talking .avatar-circle {
+  animation: avatarTalking 0.5s ease-in-out infinite;
+  box-shadow: 0 10px 40px rgba(56, 239, 125, 0.5);
+}
+
+.avatar-emoji {
+  font-size: 120px;
+  animation: fadeIn 0.5s ease-in;
+}
+
+@keyframes avatarTalking {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+.avatar-name {
+  margin-top: 20px;
+  font-size: 28px;
+  font-weight: 700;
+  color: white;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  animation: fadeIn 0.5s ease-in;
+}
+
+.scenario-subtitle {
+  margin-top: 10px;
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+}
+
+.interim-transcript {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  font-style: italic;
+  min-height: 20px;
+  margin-bottom: 10px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.heygen-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
