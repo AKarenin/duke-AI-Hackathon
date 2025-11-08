@@ -9,15 +9,15 @@ const WS_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:3001';
 const scenarioDetails = {
   introduction: {
     title: 'Introducing yourself to a new person',
-    avatarName: 'Alex',
-    avatarEmoji: '👤',
+    avatarName: 'Alessandra',
+    avatarEmoji: '👩‍💼',  // Professional woman
     avatarColor: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
     description: 'Professional networking scenario'
   },
   'coffee-spill': {
     title: 'Spilling coffee on a stranger in a cafe',
-    avatarName: 'Alex',
-    avatarEmoji: '☕',
+    avatarName: 'Pedro',
+    avatarEmoji: '👨',  // Casual man
     avatarColor: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
     description: 'Handle an awkward social situation'
   }
@@ -32,6 +32,7 @@ function ConversationPage() {
   const [avatarState, setAvatarState] = useState('idle');
   const [interimTranscript, setInterimTranscript] = useState('');
   const [streamingReady, setStreamingReady] = useState(false);
+  const [isEnding, setIsEnding] = useState(false);
   const socketRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -51,14 +52,24 @@ function ConversationPage() {
 
     socketRef.current.on('session-started', ({ sessionId: newSessionId, scenario: scenarioName, streamingReady: ready }) => {
       setSessionId(newSessionId);
-      setStreamingReady(ready);
-      console.log('✅ Session started:', newSessionId, 'Streaming ready:', ready);
-      setStatus(ready ? '🎬 Live streaming ready!' : 'Session started - listening...');
+      // Don't set streamingReady yet if HeyGen is available - let ICE connection state control it
+      if (!ready) {
+        setStreamingReady(false);  // No HeyGen, use placeholder
+        setStatus('Session started - listening...');
+      } else {
+        // HeyGen available, but keep placeholder visible until ICE connects
+        setStreamingReady(false);  // Will be set to true when ICE state becomes 'connected'
+        setStatus('🎬 Connecting to video avatar...');
+      }
+      console.log('✅ Session started:', newSessionId, 'HeyGen available:', ready);
     });
 
-    socketRef.current.on('heygen-ready', async ({ sdp, iceServers }) => {
+    socketRef.current.on('heygen-ready', async ({ sessionId: heygenSessionId, sdp, iceServers }) => {
       console.log('🎬 HeyGen ready, setting up WebRTC...');
-      await setupHeyGenWebRTC(sdp, iceServers);
+      console.log('   Using sessionId from backend:', heygenSessionId);
+      console.log('   Received ICE servers:', iceServers ? iceServers.length : 0);
+      console.log('   ICE servers:', JSON.stringify(iceServers).substring(0, 200));
+      await setupHeyGenWebRTC(sdp, iceServers, heygenSessionId);
     });
 
     socketRef.current.on('avatar-state', ({ state }) => {
@@ -139,8 +150,17 @@ function ConversationPage() {
 
     socketRef.current.on('conversation-ended', ({ sessionData }) => {
       console.log('Conversation ended:', sessionData);
-      // Navigate to feedback page with session data
-      navigate('/feedback', { state: { sessionData } });
+      setIsEnding(true);
+      setStatus('📊 Generating your feedback...');
+      
+      // Stop recording
+      stopRecording();
+      
+      // Wait a moment before navigating to avoid black screen flash
+      setTimeout(() => {
+        console.log('Navigating to feedback page...');
+        navigate('/feedback', { state: { sessionData } });
+      }, 500);
     });
 
     return () => {
@@ -202,12 +222,27 @@ function ConversationPage() {
     }
   };
 
-  const setupHeyGenWebRTC = async (sdp, iceServers) => {
+  const setupHeyGenWebRTC = async (sdp, iceServers, heygenSessionId) => {
     try {
       console.log('🎬 Setting up HeyGen WebRTC connection...');
+      console.log('   SessionId:', heygenSessionId);
+      
+      // Use HeyGen ICE servers + add Google's public STUN/TURN as fallback
+      const fallbackICEServers = [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' }
+      ];
+      
+      const allICEServers = iceServers && iceServers.length > 0 
+        ? [...iceServers, ...fallbackICEServers]
+        : fallbackICEServers;
+      
+      console.log('   Using ICE servers:', allICEServers.length, 'servers');
       
       const peerConnection = new RTCPeerConnection({
-        iceServers: iceServers || [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: allICEServers,
+        iceTransportPolicy: 'all'  // Try all methods
       });
 
       peerConnectionRef.current = peerConnection;
@@ -220,8 +255,38 @@ function ConversationPage() {
         }
       };
 
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('🧊 ICE candidate:', event.candidate.type, event.candidate.candidate.substring(0, 50));
+          
+          // Send ICE candidates to backend to relay to HeyGen
+          socketRef.current.emit('heygen-ice-candidate', {
+            sessionId: heygenSessionId,
+            candidate: event.candidate
+          });
+        } else {
+          console.log('🧊 ICE gathering complete');
+        }
+      };
+
       peerConnection.oniceconnectionstatechange = () => {
         console.log('ICE connection state:', peerConnection.iceConnectionState);
+        console.log('ICE gathering state:', peerConnection.iceGatheringState);
+        
+        // Only show video when ACTUALLY connected or completed
+        if (peerConnection.iceConnectionState === 'connected' || 
+            peerConnection.iceConnectionState === 'completed') {
+          console.log('✅ HeyGen fully connected - showing video!');
+          setStreamingReady(true);  // NOW show video, hide loading
+        } else if (peerConnection.iceConnectionState === 'disconnected' || 
+                   peerConnection.iceConnectionState === 'failed') {
+          console.error('❌ HeyGen connection failed!');
+          console.log('   Signaling state:', peerConnection.signalingState);
+          setStreamingReady(false);  // Show loading state
+        } else if (peerConnection.iceConnectionState === 'checking') {
+          console.log('⏳ HeyGen connecting... (loading visible)');
+          setStreamingReady(false);  // Keep loading until connected
+        }
       };
 
       // Set remote description
@@ -235,10 +300,11 @@ function ConversationPage() {
       await peerConnection.setLocalDescription(answer);
 
       console.log('✅ HeyGen WebRTC connection established');
+      console.log('   Sending answer with sessionId:', heygenSessionId);
       
-      // Send answer back to backend
+      // Send answer back to backend with correct sessionId
       socketRef.current.emit('heygen-answer', {
-        sessionId,
+        sessionId: heygenSessionId,  // Use the sessionId from backend
         sdp: answer.sdp
       });
 
@@ -283,6 +349,18 @@ function ConversationPage() {
     socketRef.current.emit('end-session', { sessionId });
   };
 
+  // Debug logging
+  console.log('🎨 Render state:', { 
+    isActive, 
+    streamingReady, 
+    avatarState, 
+    scenario,
+    isEnding,
+    scenarioExists: !!scenarioDetails[scenario],
+    shouldShowPlaceholder: !streamingReady || !isActive || isEnding,
+    avatarColor: scenarioDetails[scenario]?.avatarColor
+  });
+
   return (
     <div className="conversation-page">
       <Link to="/" className="home-button">🏠 Home</Link>
@@ -297,39 +375,28 @@ function ConversationPage() {
           style={{ display: streamingReady && isActive ? 'block' : 'none' }}
         />
         
-        {/* Fallback Avatar (shown when not streaming) */}
-        {(!streamingReady || !isActive) && (
-          <div 
-            className={`avatar-placeholder ${avatarState}`}
-            style={{ background: scenarioDetails[scenario]?.avatarColor }}
-          >
-            <div className="avatar-circle">
-              <div className="avatar-emoji">
-                {isActive 
-                  ? (avatarState === 'talking' ? '🗣️' : scenarioDetails[scenario]?.avatarEmoji || '🙂')
-                  : scenarioDetails[scenario]?.avatarEmoji || '🙂'
-                }
-              </div>
+        {/* Loading state while HeyGen connects - NO PLACEHOLDER */}
+        {!streamingReady && isActive && !isEnding && (
+          <div className="avatar-loading">
+            <div className="loading-spinner"></div>
+            <div className="loading-text">Connecting to {scenarioDetails[scenario]?.avatarName}...</div>
+          </div>
+        )}
+        
+        {/* Pre-start overlay */}
+        {!isActive && !isEnding && (
+          <div className="avatar-placeholder" style={{ background: scenarioDetails[scenario]?.avatarColor || 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
+            <div className="video-overlay">
+              <h2>{scenarioDetails[scenario]?.title}</h2>
+              <p className="scenario-subtitle">Talk to {scenarioDetails[scenario]?.avatarName}</p>
             </div>
-            {isActive && (
-              <div className="avatar-name">
-                {scenarioDetails[scenario]?.avatarName || 'Alex'}
-              </div>
-            )}
           </div>
         )}
         
         {/* Avatar state indicator */}
-        {isActive && (
+        {isActive && streamingReady && (
           <div className={`avatar-indicator ${avatarState}`}>
-            {streamingReady && '🎬 '}{avatarState === 'talking' ? '🗣️ AI Speaking...' : '👂 Listening...'}
-          </div>
-        )}
-        
-        {!isActive && (
-          <div className="video-overlay">
-            <h2>{scenarioDetails[scenario]?.title}</h2>
-            <p className="scenario-subtitle">Talk to {scenarioDetails[scenario]?.avatarName}</p>
+            🎬 {avatarState === 'talking' ? 'AI Speaking...' : 'Listening...'}
           </div>
         )}
       </div>

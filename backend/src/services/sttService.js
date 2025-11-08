@@ -44,7 +44,7 @@ class STTService {
   }
 
   // For streaming transcription with confidence and volume tracking
-  createLiveTranscription(onTranscript, onError) {
+  createLiveTranscription(onTranscript, onError, onOpen) {
     if (!this.deepgramApiKey) {
       console.warn('⚠️ Deepgram API key not configured');
       return null;
@@ -64,7 +64,7 @@ class STTService {
         // Don't specify encoding - let Deepgram auto-detect from WebM container
         // The browser sends WebM which contains Opus, but Deepgram needs to unwrap it
         channels: 1,
-        endpointing: 3000,  // Wait 3 seconds of silence before finalizing (prevents mid-speech cutoff)
+        endpointing: 5000,  // Wait 5 seconds of silence before finalizing (allows natural thinking pauses)
         vad_events: true,  // Voice activity detection
       });
 
@@ -93,6 +93,11 @@ class STTService {
         if (typeof connection.keepAlive === 'function') {
           console.log('   Starting keepAlive...');
           connection.keepAlive();
+        }
+        
+        // Notify that connection is actually ready
+        if (onOpen) {
+          onOpen();
         }
       });
 

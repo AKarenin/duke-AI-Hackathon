@@ -64,7 +64,7 @@ class FeedbackService {
       })
       .join('\n');
 
-    const prompt = `Analyze this conversation and provide scores:
+    const prompt = `You are a HIGHLY CRITICAL communication coach analyzing this conversation. Be harsh, demanding, and identify EVERY flaw.
 
 Conversation:
 ${conversationText}
@@ -73,43 +73,52 @@ Speech Analytics Summary:
 - Average Speech Confidence: ${avgConfidence.toFixed(2)} (0.0-1.0, where >0.85 is excellent)
 - Average Volume Level: ${avgVolume.toFixed(1)} (0-100, where 30-70 is conversational)
 
+GRADING PHILOSOPHY - BE EXTREMELY CRITICAL:
+- Excellence is rare. Most people deserve 50-70 range
+- 80+ is exceptional and should be VERY rare
+- Identify EVERY weakness: hesitations, filler words, unclear statements, missed opportunities
+- Don't sugarcoat - point out specific failures in communication
+- Low confidence (<0.9) is a serious problem
+- Inconsistent volume shows poor control
+- Generic responses show lack of engagement
+
 Provide your analysis as JSON with this exact format:
 {
-  "overallScore": <number 0-100>,
+  "overallScore": <number 0-100, BE HARSH - most scores should be 50-75>,
   "categories": {
-    "confidence": <number 1-6>,
-    "tact": <number 1-6>,
-    "friendliness": <number 1-6>,
-    "respect": <number 1-6>,
-    "attentiveness": <number 1-6>,
-    "empathy": <number 1-6>
+    "confidence": <number 1-6, penalize ANY hesitation>,
+    "tact": <number 1-6, require excellent diplomacy for high scores>,
+    "friendliness": <number 1-6, generic pleasantries don't count>,
+    "respect": <number 1-6, basic politeness isn't enough>,
+    "attentiveness": <number 1-6, demand active listening evidence>,
+    "empathy": <number 1-6, require genuine emotional connection>
   },
   "speechMetrics": {
-    "clarity": <number 0-100 based on confidence scores>,
-    "volumeAppropriacy": <number 0-100 based on volume levels>,
-    "consistencyScore": <number 0-100 based on variation in metrics>
+    "clarity": <number 0-100, penalize confidence <0.9>,
+    "volumeAppropriacy": <number 0-100, penalize ANY inconsistency>,
+    "consistencyScore": <number 0-100, expect near-perfect consistency>
   }
 }
 
-Evaluate based on:
-- Confidence: assertiveness, clarity, self-assurance (use speech confidence and volume as indicators)
-- Tact: diplomacy, sensitivity in difficult situations
-- Friendliness: warmth, approachability
-- Respect: politeness, consideration
-- Attentiveness: active listening, engagement
-- Empathy: understanding, emotional awareness
+CRITICAL EVALUATION STANDARDS:
+- Confidence: Only 5-6 if speech is crystal clear, assertive, NO hesitation. Any "um", "uh", pauses = major penalty
+- Tact: Demand sophisticated diplomacy. Basic politeness = 3/6 max
+- Friendliness: Generic "nice to meet you" is bare minimum. Require genuine warmth and personality
+- Respect: Basic politeness is expected, not rewarded. Look for deeper consideration
+- Attentiveness: Must demonstrate they listened (references, follow-ups). Generic responses = failure
+- Empathy: Must show genuine emotional intelligence, not just surface-level pleasantries
 
-Speech Analysis Guidelines:
-- Low confidence scores (<0.7) suggest unclear speech or hesitation
-- Very low volume (<20) suggests lack of assertiveness
-- Very high volume (>80) may indicate aggression
-- Consistent metrics suggest comfort and confidence`;
+Speech Penalties:
+- Confidence <0.9 = automatically cap clarity at 70
+- Volume <25 or >75 = cap appropriacy at 60
+- Confidence variance >0.1 = shows nervousness, major penalty
+- Short responses (<5 words) = disengaged, major penalty`;
 
     const response = await this.openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
+      model: 'gpt-4o',  // Latest model for most accurate critical analysis
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
-      temperature: 0.3
+      temperature: 0.2  // Lower temperature for more consistent harsh grading
     });
 
     const result = JSON.parse(response.choices[0].message.content);
@@ -139,21 +148,29 @@ Speech Analysis Guidelines:
         speechInfo = `\nSpeech Analytics: ${parts.join(', ')}`;
       }
 
-      const prompt = `Provide brief (one sentence) constructive feedback on this user message:
+      const prompt = `You are a HARSH communication critic. Provide brutally honest, critical feedback on this user message:
 
 Context:
 ${context}
 
 User message: "${message.text}"${speechInfo}
 
-Give specific, actionable feedback focusing on communication skills. If speech metrics indicate low confidence or inappropriate volume, mention it. Keep it to ONE sentence.`;
+BE CRITICAL AND DEMANDING:
+- Identify specific weaknesses (vague language, lack of detail, generic responses, missed opportunities)
+- If confidence <0.9 or volume inappropriate, call it out as a major problem
+- Generic responses like "nice to meet you" deserve criticism for lack of personality
+- Short responses show disengagement
+- Point out what they SHOULD have said instead
+
+Give ONE sentence of harsh, specific, actionable criticism. Don't sugarcoat.`;
+
 
       try {
         const response = await this.openai.chat.completions.create({
-          model: 'gpt-4-turbo-preview',
+          model: 'gpt-4o',  // Latest model for harshest, most accurate criticism
           messages: [{ role: 'user', content: prompt }],
-          temperature: 0.5,
-          max_tokens: 60
+          temperature: 0.3,  // Lower for more consistent critical tone
+          max_tokens: 80  // Slightly more tokens for detailed criticism
         });
 
         return {
@@ -202,18 +219,18 @@ Give specific, actionable feedback focusing on communication skills. If speech m
 
   getDefaultFeedback(transcript) {
     return {
-      overallScore: 75,
+      overallScore: 50,  // Default to average, not good
       categories: {
-        confidence: 4,
-        tact: 4,
-        friendliness: 4,
-        respect: 4,
-        attentiveness: 4,
-        empathy: 4
+        confidence: 3,  // Middle of the road
+        tact: 3,
+        friendliness: 3,
+        respect: 3,
+        attentiveness: 3,
+        empathy: 3
       },
       transcript: transcript.map(entry => ({
         ...entry,
-        feedback: entry.speaker === 'user' ? 'Good communication skills demonstrated.' : undefined
+        feedback: entry.speaker === 'user' ? 'Unable to analyze - ensure you provide more detailed, engaging responses.' : undefined
       }))
     };
   }

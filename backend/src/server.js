@@ -50,6 +50,44 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3001;
 
-server.listen(PORT, () => {
+// Cleanup any orphaned HeyGen sessions on startup
+async function cleanupHeyGenSessions() {
+  const heygenService = require('./services/heygenService');
+  try {
+    const axios = require('axios');
+    const apiKey = process.env.HEYGEN_API_KEY;
+    
+    if (!apiKey) return;
+    
+    const response = await axios.get('https://api.heygen.com/v1/streaming.list', {
+      headers: { 'X-Api-Key': apiKey }
+    });
+    
+    const sessions = response.data.data?.sessions || [];
+    console.log(`🧹 Found ${sessions.length} active HeyGen sessions on startup`);
+    
+    for (const session of sessions) {
+      try {
+        await axios.post('https://api.heygen.com/v1/streaming.stop', {
+          session_id: session.session_id
+        }, {
+          headers: { 'X-Api-Key': apiKey, 'Content-Type': 'application/json' }
+        });
+        console.log(`   ✅ Closed orphaned session: ${session.session_id}`);
+      } catch (e) {
+        console.log(`   ⚠️ Failed to close ${session.session_id}`);
+      }
+    }
+    
+    console.log('🧹 HeyGen cleanup complete');
+  } catch (error) {
+    console.log('⚠️ HeyGen cleanup skipped:', error.message);
+  }
+}
+
+server.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
+  
+  // Clean up old HeyGen sessions
+  await cleanupHeyGenSessions();
 });

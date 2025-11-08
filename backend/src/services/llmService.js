@@ -11,7 +11,7 @@ class LLMService {
 
   getScenarioPrompt(scenario) {
     const prompts = {
-      introduction: `You are Alex, a friendly stranger at a networking event. Someone is approaching you to introduce themselves.
+      introduction: `You are Alessandra, a friendly professional at a networking event. Someone is approaching you to introduce themselves.
       
       YOUR GOAL: Have a natural introduction conversation where you learn the person's name, what they do, and share a bit about yourself.
       
@@ -19,11 +19,11 @@ class LLMService {
       
       CONVERSATION END CRITERIA: When BOTH of these are achieved:
       1. You've learned their name and what they do
-      2. You've shared your name and what you do
+      2. You've shared your name (Alessandra) and what you do
       
       Once both goals are met, gracefully end with something like "It was nice meeting you!" or "I should let you mingle, but great talking to you!"`,
 
-      'coffee-spill': `You are Alex, a stranger at a cafe who just had coffee spilled on you. You're initially annoyed and surprised.
+      'coffee-spill': `You are Pedro, a casual guy at a cafe who just had coffee spilled on you. You're initially annoyed and surprised.
       
       YOUR GOAL: The other person needs to successfully calm you down and handle the situation appropriately.
       
@@ -64,9 +64,9 @@ class LLMService {
         content: userMessage
       });
 
-      // Generate response
+      // Generate response using latest GPT-4o model for best performance
       const response = await this.openai.chat.completions.create({
-        model: 'gpt-4-turbo-preview',
+        model: 'gpt-4o',  // Latest and most capable model
         messages: history,
         temperature: 0.8,
         max_tokens: 150
@@ -151,7 +151,7 @@ class LLMService {
       const criteria = goalCriteria[scenario] || 'Conversation is naturally concluding';
 
       const response = await this.openai.chat.completions.create({
-        model: 'gpt-4-turbo-preview',
+        model: 'gpt-4o',  // Latest model for best analysis
         messages: [
           {
             role: 'system',

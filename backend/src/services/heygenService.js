@@ -4,7 +4,7 @@ const WebSocket = require('ws');
 class HeyGenService {
   constructor() {
     this.apiKey = process.env.HEYGEN_API_KEY;
-    this.baseUrl = 'https://api.heygen.com/v2';
+    this.baseUrl = 'https://api.heygen.com/v1';  // Streaming API is on v1, not v2
     this.streamingSessions = new Map(); // Store active streaming sessions
     this.audioToVideoSessions = new Map(); // Store audio-to-video sessions
   }
@@ -16,7 +16,7 @@ class HeyGenService {
     // Map scenarios to specific avatar IDs and configurations
     const scenarioConfigs = {
       introduction: {
-        avatarId: 'Angela-inblackskirt-20220820', // Professional, friendly avatar
+        avatarId: 'Alessandra_ProfessionalLook2_public', // Professional female avatar
         voice: {
           voiceId: '2d5b0e6cf36f460aa7fc47e3eee4ba54', // Friendly female voice
           rate: 1.0,
@@ -26,7 +26,7 @@ class HeyGenService {
         background: 'office'
       },
       'coffee-spill': {
-        avatarId: 'Tyler-incasualsuit-20220721', // Casual, approachable avatar
+        avatarId: 'Pedro_CasualLook_public', // Casual male avatar
         voice: {
           voiceId: '1bd001e7e50f421d891986aad5158bc8', // Natural male voice
           rate: 1.05,
@@ -137,23 +137,21 @@ class HeyGenService {
     }
   }
 
-  // Submit WebRTC answer to complete handshake
-  async submitWebRTCAnswer(heygenSessionId, sdp) {
+  // Send ICE candidate to HeyGen
+  async sendICECandidate(heygenSessionId, candidate) {
     if (!this.apiKey) {
-      console.warn('HeyGen API key not configured');
       return null;
     }
 
     try {
-      console.log('Submitting WebRTC answer to HeyGen');
       const response = await axios.post(
         `${this.baseUrl}/streaming.ice`,
         {
           session_id: heygenSessionId,
           candidate: {
-            sdpMid: '0',
-            sdpMLineIndex: 0,
-            candidate: sdp
+            candidate: candidate.candidate,
+            sdpMid: candidate.sdpMid,
+            sdpMLineIndex: candidate.sdpMLineIndex
           }
         },
         {
@@ -166,7 +164,8 @@ class HeyGenService {
 
       return response.data;
     } catch (error) {
-      console.error('Error submitting WebRTC answer:', error.response?.data || error.message);
+      // ICE candidate errors are often not critical
+      console.log('   ICE candidate error (non-critical):', error.response?.data?.message || error.message);
       return null;
     }
   }

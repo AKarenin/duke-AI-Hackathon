@@ -4,20 +4,42 @@ const WebSocket = require('ws');
 class TTSService {
   constructor() {
     this.apiKey = process.env.ELEVENLABS_API_KEY;
-    this.voiceId = 'EXAVITQu4vr4xnSDxMaL'; // Default voice (Sarah)
     this.activeStreams = new Map(); // Track active streaming sessions
+    
+    // Voice configuration per scenario
+    this.scenarioVoices = {
+      introduction: {
+        voiceId: 'EXAVITQu4vr4xnSDxMaL',  // Sarah - Professional female voice
+        name: 'Sarah (Female)',
+        gender: 'female'
+      },
+      'coffee-spill': {
+        voiceId: 'pNInz6obpgDQGcFmaJgB',  // Adam - Casual male voice
+        name: 'Adam (Male)',
+        gender: 'male'
+      }
+    };
   }
 
-  async textToSpeech(text) {
+  // Get voice ID for a specific scenario
+  getVoiceForScenario(scenario) {
+    const voiceConfig = this.scenarioVoices[scenario] || this.scenarioVoices.introduction;
+    console.log(`🎙️ Using ${voiceConfig.name} for scenario: ${scenario}`);
+    return voiceConfig.voiceId;
+  }
+
+  async textToSpeech(text, scenario = 'introduction') {
     if (!this.apiKey) {
       console.warn('ElevenLabs API key not configured');
       return null;
     }
 
+    const voiceId = this.getVoiceForScenario(scenario);
+
     try {
       console.log('Generating TTS for text:', text.substring(0, 50) + '...');
       const response = await axios.post(
-        `https://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}`,
+        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
         {
           text,
           model_id: 'eleven_turbo_v2',  // Updated to newer model available on free tier
@@ -75,16 +97,18 @@ class TTSService {
   }
 
   // Create streaming TTS connection (real-time audio chunks)
-  createStreamingTTS(sessionId, onAudioChunk, onComplete, onError) {
+  createStreamingTTS(sessionId, onAudioChunk, onComplete, onError, scenario = 'introduction') {
     if (!this.apiKey) {
       console.warn('⚠️ ElevenLabs API key not configured');
       return null;
     }
 
+    const voiceId = this.getVoiceForScenario(scenario);
+
     try {
       console.log('🎙️ Creating ElevenLabs streaming TTS connection...');
       
-      const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${this.voiceId}/stream-input?model_id=eleven_turbo_v2`;
+      const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream-input?model_id=eleven_turbo_v2`;
       
       const ws = new WebSocket(wsUrl, {
         headers: {

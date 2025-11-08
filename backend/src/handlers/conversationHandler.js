@@ -20,17 +20,40 @@ module.exports = function(socket, io) {
 
     // Setup live transcription (Deepgram -> GPT)
     console.log('🎙️ Setting up Deepgram live transcription...');
+    
+    // Create a promise that resolves when Deepgram connection opens
+    let deepgramReady;
+    const deepgramReadyPromise = new Promise((resolve) => {
+      deepgramReady = resolve;
+    });
+    
     const liveTranscription = sttService.createLiveTranscription(
       (data) => {
         console.log('🔔 Transcription callback triggered!');
         handleTranscription(socket, session.id, data);
       },
-      (error) => console.error('❌ Transcription error:', error)
+      (error) => console.error('❌ Transcription error:', error),
+      () => {
+        // Connection opened callback
+        console.log('✅ Deepgram connection ACTUALLY opened - ready for audio');
+        deepgramReady();
+      }
     );
 
     if (liveTranscription) {
       activeTranscriptions.set(session.id, liveTranscription);
-      console.log('✅ Deepgram transcription ready');
+      console.log('⏳ Waiting for Deepgram connection to open...');
+      
+      // Wait for Deepgram to actually open before proceeding
+      await Promise.race([
+        deepgramReadyPromise,
+        new Promise(resolve => setTimeout(() => {
+          console.warn('⚠️ Deepgram open timeout - proceeding anyway');
+          resolve();
+        }, 2000))
+      ]);
+      
+      console.log('✅ Deepgram transcription ready and connected');
     } else {
       console.error('❌ Failed to create Deepgram transcription');
     }
@@ -40,37 +63,54 @@ module.exports = function(socket, io) {
     console.log('🎬 Attempting to create HeyGen streaming session...');
     const heygenSession = await heygenService.createStreamingSession(session.id, scenario);
     
-    if (heygenSession) {
+    // Check if HeyGen is ready
+    if (heygenSession && heygenSession.sdp) {
       console.log('✅ HeyGen session created successfully');
       activeHeyGenSessions.set(session.id, heygenSession);
-      
-      // Start the HeyGen session
-      const startResult = await heygenService.startStreamingSession(session.id);
-      if (startResult) {
-        streamingReady = true;
-        console.log('✅ HeyGen streaming started');
-        
-        // Send WebRTC connection info to frontend
-        socket.emit('heygen-ready', {
-          sdp: heygenSession.sdp,
-          iceServers: heygenSession.ice_servers
-        });
-      } else {
-        console.warn('⚠️ Failed to start HeyGen session, falling back to simple mode');
-      }
-    } else {
-      console.warn('⚠️ HeyGen not available, using simple mode');
+      streamingReady = true;
     }
-
+    
     // Ensure streamingReady is always a boolean
     const isStreamingReady = Boolean(streamingReady);
     console.log('📤 Emitting session-started with streamingReady:', isStreamingReady, '(original value:', streamingReady, ')');
     
+    // Send session-started FIRST so frontend has sessionId
     socket.emit('session-started', {
       sessionId: session.id,
       scenario,
       streamingReady: isStreamingReady
     });
+
+    // THEN send HeyGen WebRTC offer if available (after frontend has sessionId)
+    if (heygenSession && heygenSession.sdp) {
+      
+      // Extract SDP string if it's an object with an 'sdp' property
+      const sdpString = typeof heygenSession.sdp === 'object' 
+        ? (heygenSession.sdp.sdp || JSON.stringify(heygenSession.sdp))
+        : heygenSession.sdp;
+      
+      console.log('   Sending SDP (first 100 chars):', sdpString.substring(0, 100));
+      
+      // Provide fallback ICE servers if not included
+      const iceServers = heygenSession.ice_servers || heygenSession.iceServers || [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ];
+      
+      console.log('   ICE Servers from HeyGen:', JSON.stringify(iceServers).substring(0, 200));
+      
+      // Send WebRTC offer to frontend WITH sessionId
+      console.log('📤 Sending HeyGen WebRTC offer to frontend...');
+      socket.emit('heygen-ready', {
+        sessionId: session.id,  // Include sessionId so frontend can send it back
+        sdp: sdpString,
+        iceServers: iceServers
+      });
+      
+      // Mark session as pending WebRTC handshake
+      heygenSession.webrtcReady = false;
+    } else if (streamingReady) {
+      console.warn('⚠️ HeyGen session created but missing SDP');
+    }
 
     // Send initial AI greeting
     console.log('🤖 Sending initial greeting...');
@@ -130,10 +170,30 @@ module.exports = function(socket, io) {
   // Handle WebRTC answer from client for HeyGen
   socket.on('heygen-answer', async ({ sessionId, sdp }) => {
     console.log('📥 Received WebRTC answer from client');
+    console.log('   Session ID:', sessionId);
+    
     const heygenSession = activeHeyGenSessions.get(sessionId);
+    console.log('   HeyGen session found:', !!heygenSession);
+    
     if (heygenSession && heygenSession.session_id) {
-      await heygenService.submitWebRTCAnswer(heygenSession.session_id, sdp);
-      console.log('✅ WebRTC answer submitted to HeyGen');
+      // Mark as ready - will be fully ready once ICE candidates connect
+      heygenSession.webrtcReady = true;
+      console.log('✅ WebRTC answer received - waiting for ICE candidates...');
+    } else {
+      console.warn('⚠️ No HeyGen session found for ID:', sessionId);
+    }
+  });
+
+  // Handle ICE candidates from client for HeyGen
+  socket.on('heygen-ice-candidate', async ({ sessionId, candidate }) => {
+    const heygenSession = activeHeyGenSessions.get(sessionId);
+    
+    if (heygenSession && heygenSession.session_id) {
+      console.log('🧊 Sending ICE candidate to HeyGen:', candidate.type);
+      const result = await heygenService.sendICECandidate(heygenSession.session_id, candidate);
+      if (result) {
+        console.log('   ✅ ICE candidate sent successfully');
+      }
     }
   });
 
@@ -279,7 +339,7 @@ async function handleAIResponse(socket, sessionId, text, scenario) {
   });
 
   // ALWAYS use ElevenLabs for audio (as requested)
-  await playElevenLabsAudio(socket, text);
+  await playElevenLabsAudio(socket, text, scenario);
 
   // Estimate speaking duration and return to idle
   const speakingDuration = text.length * 50; // Rough estimate: 50ms per character
@@ -323,21 +383,30 @@ async function handleAIResponseWithHeyGen(socket, sessionId, text, scenario) {
     state: 'talking'
   });
 
+  // Check if WebRTC handshake is complete
+  const heygenSession = activeHeyGenSessions.get(sessionId);
+  
   try {
-    // Send text to HeyGen avatar to speak
-    console.log('🎬 Sending text to HeyGen avatar...');
-    const result = await heygenService.speakWithAvatar(sessionId, text);
-    
-    if (result) {
-      console.log('✅ HeyGen avatar speaking');
+    if (heygenSession && heygenSession.webrtcReady) {
+      // WebRTC is ready - use HeyGen avatar
+      console.log('🎬 Sending text to HeyGen avatar...');
+      const result = await heygenService.speakWithAvatar(sessionId, text);
+      
+      if (result && !result.error) {
+        console.log('✅ HeyGen avatar speaking');
+      } else {
+        console.warn('⚠️ HeyGen speaking failed, falling back to audio');
+        await playElevenLabsAudio(socket, text, scenario);
+      }
     } else {
-      console.warn('⚠️ HeyGen speaking failed, falling back to audio');
-      await playElevenLabsAudio(socket, text);
+      // WebRTC not ready yet - use regular audio
+      console.log('⏳ HeyGen WebRTC not ready yet, using audio fallback');
+      await playElevenLabsAudio(socket, text, scenario);
     }
   } catch (error) {
     console.error('❌ Error with HeyGen avatar:', error);
     // Fallback to regular audio
-    await playElevenLabsAudio(socket, text);
+    await playElevenLabsAudio(socket, text, scenario);
   }
 
   // Estimate speaking duration and return to idle
@@ -393,13 +462,13 @@ async function handleAIResponseStreaming(socket, sessionId, text, scenario) {
     }, speakingDuration);
   } else {
     console.warn('⚠️ No active TTS stream, falling back to regular audio');
-    await playElevenLabsAudio(socket, text);
+    await playElevenLabsAudio(socket, text, scenario);
   }
 }
 
 // Helper function to play ElevenLabs audio
-async function playElevenLabsAudio(socket, text) {
-  const audioBuffer = await ttsService.textToSpeech(text);
+async function playElevenLabsAudio(socket, text, scenario = 'introduction') {
+  const audioBuffer = await ttsService.textToSpeech(text, scenario);
   if (audioBuffer) {
     console.log('Sending ElevenLabs audio to client, size:', audioBuffer.length);
     socket.emit('ai-audio', { audio: Array.from(new Uint8Array(audioBuffer)) });
@@ -432,11 +501,11 @@ async function endSession(socket, sessionId) {
   }
   activeTTSStreams.delete(sessionId);
 
-  // Close HeyGen audio-to-video session
+  // Close HeyGen streaming session properly
   const heygenSession = activeHeyGenSessions.get(sessionId);
   if (heygenSession) {
-    console.log('🔌 Closing HeyGen session...');
-    await heygenService.closeAudioToVideoSession(sessionId);
+    console.log('🔌 Closing HeyGen session:', heygenSession.session_id);
+    await heygenService.stopStreamingSession(sessionId);
   }
   activeHeyGenSessions.delete(sessionId);
 
@@ -458,8 +527,8 @@ async function endSession(socket, sessionId) {
 
 async function generateInitialGreeting(scenario) {
   const greetings = {
-    introduction: "Hi there! I don't think we've met before. I'm Alex.",
-    'coffee-spill': "Oh! Careful there!"
+    introduction: "Hi there! I don't think we've met before. I'm Alessandra.",
+    'coffee-spill': "Oh! Careful there!"  // Pedro doesn't introduce himself when upset
   };
 
   return greetings[scenario] || greetings.introduction;
