@@ -137,6 +137,39 @@ class HeyGenService {
     }
   }
 
+  // Send client's answer SDP to HeyGen
+  async sendAnswer(heygenSessionId, sdp) {
+    if (!this.apiKey) {
+      return null;
+    }
+
+    try {
+      console.log('📤 Sending WebRTC answer to HeyGen...');
+      const response = await axios.post(
+        `${this.baseUrl}/streaming.sdp`,
+        {
+          session_id: heygenSessionId,
+          answer: {
+            type: 'answer',
+            sdp: sdp
+          }
+        },
+        {
+          headers: {
+            'X-Api-Key': this.apiKey,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      console.log('✅ Answer sent to HeyGen successfully');
+      return response.data;
+    } catch (error) {
+      console.error('❌ Error sending answer to HeyGen:', error.response?.data || error.message);
+      return null;
+    }
+  }
+
   // Send ICE candidate to HeyGen
   async sendICECandidate(heygenSessionId, candidate) {
     if (!this.apiKey) {
@@ -144,6 +177,7 @@ class HeyGenService {
     }
 
     try {
+      console.log('🧊 Sending ICE candidate to HeyGen...');
       const response = await axios.post(
         `${this.baseUrl}/streaming.ice`,
         {
@@ -162,10 +196,15 @@ class HeyGenService {
         }
       );
 
+      console.log('✅ ICE candidate sent successfully');
       return response.data;
     } catch (error) {
-      // ICE candidate errors are often not critical
-      console.log('   ICE candidate error (non-critical):', error.response?.data?.message || error.message);
+      // Log the full error for debugging
+      console.error('❌ ICE candidate error:', {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data
+      });
       return null;
     }
   }

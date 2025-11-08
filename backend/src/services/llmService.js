@@ -33,7 +33,7 @@ class LLMService {
       
       Keep responses brief and realistic (2-3 sentences max).
       
-      When you're satisfied with how they handled it, end with something like "Alright, it's okay, these things happen" or "Thanks for being so understanding about it."`
+      When you're satisfied with how they handled it, end with something like "Alright, it's okay, these things happen" or "Its, fine, no problem."`
     };
 
     return prompts[scenario] || prompts.introduction;

@@ -61,12 +61,25 @@ class TTSService {
       console.log('TTS response received, size:', response.data.byteLength);
       return response.data;
     } catch (error) {
-      console.error('TTS error details:', {
-        message: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data ? error.response.data.toString() : 'No data'
-      });
+      const status = error.response?.status;
+      const statusText = error.response?.statusText;
+      
+      // Check for rate limit error
+      if (status === 429) {
+        console.error('🚨 ELEVENLABS RATE LIMIT HIT! 🚨');
+        console.error('You have exceeded your ElevenLabs API quota.');
+        console.error('Either wait for quota reset or upgrade your plan.');
+      } else if (status === 401) {
+        console.error('🚨 ELEVENLABS AUTHENTICATION ERROR! 🚨');
+        console.error('Check your ELEVENLABS_API_KEY in .env file');
+      } else {
+        console.error('TTS error details:', {
+          message: error.message,
+          status,
+          statusText,
+          data: error.response?.data ? error.response.data.toString() : 'No data'
+        });
+      }
       return null;
     }
   }

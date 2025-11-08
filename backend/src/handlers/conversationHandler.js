@@ -2,13 +2,13 @@ const sessionManager = require('../services/sessionManager');
 const sttService = require('../services/sttService');
 const llmService = require('../services/llmService');
 const ttsService = require('../services/ttsService');
-const heygenService = require('../services/heygenService');
+const avatarImageManager = require('../services/avatarImageManager');
 const feedbackService = require('../services/feedbackService');
 
 let activeTranscriptions = new Map();
-let activeTTSStreams = new Map();
-let activeHeyGenSessions = new Map();
 let aiSpeakingLock = new Map(); // Track which sessions have AI currently speaking
+let silenceTimers = new Map(); // Track silence timers for each session
+let pendingTranscripts = new Map(); // Store pending transcripts during silence period
 
 module.exports = function(socket, io) {
   // Start a new conversation session
@@ -58,70 +58,23 @@ module.exports = function(socket, io) {
       console.error('❌ Failed to create Deepgram transcription');
     }
 
-    // Try to create HeyGen streaming session
-    let streamingReady = false;
-    console.log('🎬 Attempting to create HeyGen streaming session...');
-    const heygenSession = await heygenService.createStreamingSession(session.id, scenario);
+    // Initialize avatar image state
+    console.log('🖼️ Initializing avatar image state...');
+    const imageState = avatarImageManager.initializeSession(session.id, scenario);
+    console.log('✅ Avatar image initialized:', imageState);
     
-    // Check if HeyGen is ready
-    if (heygenSession && heygenSession.sdp) {
-      console.log('✅ HeyGen session created successfully');
-      activeHeyGenSessions.set(session.id, heygenSession);
-      streamingReady = true;
-    }
-    
-    // Ensure streamingReady is always a boolean
-    const isStreamingReady = Boolean(streamingReady);
-    console.log('📤 Emitting session-started with streamingReady:', isStreamingReady, '(original value:', streamingReady, ')');
-    
-    // Send session-started FIRST so frontend has sessionId
+    // Send session-started with avatar image info
     socket.emit('session-started', {
       sessionId: session.id,
       scenario,
-      streamingReady: isStreamingReady
+      avatarImage: imageState.imagePath,
+      avatarState: imageState.currentState
     });
-
-    // THEN send HeyGen WebRTC offer if available (after frontend has sessionId)
-    if (heygenSession && heygenSession.sdp) {
-      
-      // Extract SDP string if it's an object with an 'sdp' property
-      const sdpString = typeof heygenSession.sdp === 'object' 
-        ? (heygenSession.sdp.sdp || JSON.stringify(heygenSession.sdp))
-        : heygenSession.sdp;
-      
-      console.log('   Sending SDP (first 100 chars):', sdpString.substring(0, 100));
-      
-      // Provide fallback ICE servers if not included
-      const iceServers = heygenSession.ice_servers || heygenSession.iceServers || [
-        { urls: 'stun:stun.l.google.com:19302' }
-      ];
-      
-      console.log('   ICE Servers from HeyGen:', JSON.stringify(iceServers).substring(0, 200));
-      
-      // Send WebRTC offer to frontend WITH sessionId
-      console.log('📤 Sending HeyGen WebRTC offer to frontend...');
-      socket.emit('heygen-ready', {
-        sessionId: session.id,  // Include sessionId so frontend can send it back
-        sdp: sdpString,
-        iceServers: iceServers
-      });
-      
-      // Mark session as pending WebRTC handshake
-      heygenSession.webrtcReady = false;
-    } else if (streamingReady) {
-      console.warn('⚠️ HeyGen session created but missing SDP');
-    }
 
     // Send initial AI greeting
     console.log('🤖 Sending initial greeting...');
     const greeting = await generateInitialGreeting(scenario);
-    
-    // Use streaming if available, otherwise fallback to regular
-    if (isStreamingReady) {
-      await handleAIResponseWithHeyGen(socket, session.id, greeting, scenario);
-    } else {
-      await handleAIResponse(socket, session.id, greeting, scenario);
-    }
+    await handleAIResponse(socket, session.id, greeting, scenario, false);
   });
 
   // Handle incoming audio chunks
@@ -167,36 +120,6 @@ module.exports = function(socket, io) {
     }
   });
 
-  // Handle WebRTC answer from client for HeyGen
-  socket.on('heygen-answer', async ({ sessionId, sdp }) => {
-    console.log('📥 Received WebRTC answer from client');
-    console.log('   Session ID:', sessionId);
-    
-    const heygenSession = activeHeyGenSessions.get(sessionId);
-    console.log('   HeyGen session found:', !!heygenSession);
-    
-    if (heygenSession && heygenSession.session_id) {
-      // Mark as ready - will be fully ready once ICE candidates connect
-      heygenSession.webrtcReady = true;
-      console.log('✅ WebRTC answer received - waiting for ICE candidates...');
-    } else {
-      console.warn('⚠️ No HeyGen session found for ID:', sessionId);
-    }
-  });
-
-  // Handle ICE candidates from client for HeyGen
-  socket.on('heygen-ice-candidate', async ({ sessionId, candidate }) => {
-    const heygenSession = activeHeyGenSessions.get(sessionId);
-    
-    if (heygenSession && heygenSession.session_id) {
-      console.log('🧊 Sending ICE candidate to HeyGen:', candidate.type);
-      const result = await heygenService.sendICECandidate(heygenSession.session_id, candidate);
-      if (result) {
-        console.log('   ✅ ICE candidate sent successfully');
-      }
-    }
-  });
-
   // Handle manual session end
   socket.on('end-session', async ({ sessionId }) => {
     await endSession(socket, sessionId);
@@ -225,75 +148,136 @@ async function handleTranscription(socket, sessionId, data) {
   }
 
   // Send interim results to client for feedback with confidence/volume
-  if (!isFinal) {
-    socket.emit('interim-transcript', { 
-      text: transcript,
-      confidence,
-      volume
-    });
-  }
+  socket.emit('interim-transcript', { 
+    text: transcript,
+    confidence,
+    volume,
+    isFinal
+  });
 
-  if (isFinal) {
-    console.log('✅ Final transcript:', transcript);
+  // Process ALL transcripts (both interim and final) for accumulation
+  console.log(`${isFinal ? '✅' : '⏳'} ${isFinal ? 'Final' : 'Interim'} transcript:`, transcript);
+  if (confidence !== undefined) {
     console.log('   📊 Confidence:', confidence?.toFixed(3), 'Avg Word:', avgWordConfidence?.toFixed(3));
+  }
+  if (volume !== undefined) {
     console.log('   🔊 Volume:', volume?.toFixed(2));
+  }
+  
+  // CHECK 1: Don't process if AI is currently speaking
+  if (aiSpeakingLock.get(sessionId)) {
+    console.log('🔒 AI is speaking - ignoring user input to prevent interruption');
+    return;
+  }
+  
+  // CHECK 2: Ignore very short inputs that are likely transcription artifacts
+  if (transcript.trim().length < 2) {
+    console.log('⚠️ Ignoring very short transcript (likely artifact):', transcript);
+    return;
+  }
+  
+  // EDGE COMPUTING APPROACH: Wait for Deepgram to stop sending transcripts for 2 seconds
+  // Clear any existing inactivity timer - Deepgram is still sending data
+  if (silenceTimers.has(sessionId)) {
+    console.log('⏱️ Deepgram still active - resetting inactivity timer');
+    clearTimeout(silenceTimers.get(sessionId));
+  }
+  
+  // ALWAYS ACCUMULATE transcripts - append all fragments before sending to GPT
+  // This handles cases where user's sentence comes in multiple parts
+  const existing = pendingTranscripts.get(sessionId);
+  
+  if (existing) {
+    // Check if this is truly a new part or a duplicate/refinement
+    // Only consider it a duplicate if the new transcript is completely contained in existing
+    const existingLower = existing.transcript.toLowerCase().trim();
+    const newLower = transcript.toLowerCase().trim();
     
-    // CHECK 1: Don't process if AI is currently speaking
-    if (aiSpeakingLock.get(sessionId)) {
-      console.log('🔒 AI is speaking - ignoring user input to prevent interruption');
-      return;
+    // If new transcript is completely contained in existing, it's a refinement - skip it
+    const isCompletelyContained = existingLower.includes(newLower);
+    // If existing is contained in new, it's a better version - replace
+    const isReplacement = newLower.includes(existingLower);
+    
+    if (isCompletelyContained && !isReplacement) {
+      console.log('🔄 Skipping duplicate fragment (already contained in existing)');
+      console.log('   Existing:', existing.transcript);
+      console.log('   Duplicate:', transcript);
+    } else if (isReplacement) {
+      console.log('🔄 Replacing with refined transcript (better version)');
+      console.log('   Old:', existing.transcript);
+      console.log('   New:', transcript);
+      existing.transcript = transcript;
+    } else {
+      // Truly new content - ALWAYS APPEND
+      console.log('➕ Appending new transcript fragment...');
+      console.log('   Previous:', existing.transcript);
+      console.log('   New part:', transcript);
+      existing.transcript = existing.transcript + ' ' + transcript;
+      console.log('   Combined:', existing.transcript);
     }
     
-    // CHECK 2: Ignore very short inputs that are likely transcription artifacts
-    if (transcript.trim().length < 3) {
-      console.log('⚠️ Ignoring very short transcript (likely artifact):', transcript);
-      return;
+    // Update metrics (always average regardless of append/replace)
+    existing.confidence = (existing.confidence + confidence) / 2;
+    existing.avgWordConfidence = (existing.avgWordConfidence + avgWordConfidence) / 2;
+    existing.volume = (existing.volume + volume) / 2;
+    if (words && existing.words) {
+      existing.words = [...existing.words, ...words];
     }
-    
-    // CHECK 3: Prevent duplicate processing - check if we already processed this exact text
-    const recentTranscripts = session.transcript.filter(t => t.speaker === 'user').slice(-3);
-    const isDuplicate = recentTranscripts.some(t => t.text === transcript);
-    
-    if (isDuplicate) {
-      console.log('⚠️ Skipping duplicate transcript');
-      return;
-    }
-    
-    // Add user message to transcript with metadata
-    const timestamp = new Date().toLocaleTimeString();
-    sessionManager.addToTranscript(sessionId, {
-      speaker: 'user',
-      text: transcript,
-      timestamp,
+  } else {
+    // First transcript in this silence window
+    console.log('🆕 Starting new transcript accumulation');
+    pendingTranscripts.set(sessionId, {
+      transcript,
       confidence,
       avgWordConfidence,
       volume,
-      wordDetails: words
+      words: words || [],
+      timestamp: new Date().toLocaleTimeString()
+    });
+  }
+  
+  console.log('⏳ Waiting for Deepgram inactivity (2 seconds of no transcripts)...');
+  
+  // Set new timer: wait 2 seconds of Deepgram inactivity
+  const timer = setTimeout(async () => {
+    console.log('✅ 2 seconds of Deepgram inactivity detected - processing transcript now');
+    
+    const pending = pendingTranscripts.get(sessionId);
+    if (!pending) {
+      console.log('⚠️ No pending transcript found');
+      return;
+    }
+    
+    // Clear the pending transcript
+    pendingTranscripts.delete(sessionId);
+    silenceTimers.delete(sessionId);
+    
+    // Add user message to transcript with metadata
+    sessionManager.addToTranscript(sessionId, {
+      speaker: 'user',
+      text: pending.transcript,
+      timestamp: pending.timestamp,
+      confidence: pending.confidence,
+      avgWordConfidence: pending.avgWordConfidence,
+      volume: pending.volume,
+      wordDetails: pending.words
     });
 
     // Notify client with full metadata
     socket.emit('user-spoke', { 
-      text: transcript,
-      confidence,
-      avgWordConfidence,
-      volume
+      text: pending.transcript,
+      confidence: pending.confidence,
+      avgWordConfidence: pending.avgWordConfidence,
+      volume: pending.volume
     });
 
     // Generate AI response (GPT brain)
     console.log('🤖 Generating AI response...');
     const aiResponse = await llmService.generateResponse(
       sessionId,
-      transcript,
+      pending.transcript,
       session.scenario
     );
-
-    // Check if we have HeyGen streaming active
-    const heygenSession = activeHeyGenSessions.get(sessionId);
-    if (heygenSession) {
-      await handleAIResponseWithHeyGen(socket, sessionId, aiResponse, session.scenario);
-    } else {
-      await handleAIResponse(socket, sessionId, aiResponse, session.scenario);
-    }
 
     // Check if conversation goal is achieved and should end
     const shouldEnd = await llmService.detectConversationEnd(
@@ -302,17 +286,30 @@ async function handleTranscription(socket, sessionId, data) {
       session.scenario
     );
 
+    // Handle AI response with image state management (pass shouldEnd flag)
+    await handleAIResponse(socket, sessionId, aiResponse, session.scenario, shouldEnd);
+
     if (shouldEnd) {
       console.log('🎯 Ending conversation - goals achieved');
-      // Wait a moment before ending
+      // Wait for AI to finish speaking before ending
+      // Estimate based on last AI response length (50ms per character + 2 second buffer)
+      const lastAIMessage = session.transcript.filter(t => t.speaker === 'ai').slice(-1)[0];
+      const estimatedSpeakingTime = lastAIMessage 
+        ? (lastAIMessage.text.length * 50) + 2000 
+        : 5000;
+      
+      console.log(`⏳ Waiting ${estimatedSpeakingTime}ms for AI to finish speaking before ending session`);
+      
       setTimeout(() => {
         endSession(socket, sessionId);
-      }, 3000);
+      }, estimatedSpeakingTime);
     }
-  }
+  }, 2000); // Wait 2 seconds of Deepgram inactivity
+  
+  silenceTimers.set(sessionId, timer);
 }
 
-async function handleAIResponse(socket, sessionId, text, scenario) {
+async function handleAIResponse(socket, sessionId, text, scenario, isConversationEnding = false) {
   const session = sessionManager.getSession(sessionId);
   if (!session) return;
 
@@ -330,6 +327,40 @@ async function handleAIResponse(socket, sessionId, text, scenario) {
 
   console.log('AI Response:', text);
 
+  // Check if avatar image should change based on conversation state
+  let imageChanged = false;
+  
+  if (scenario === 'introduction') {
+    // ONLY show goodbye image if conversation is actually ending
+    if (isConversationEnding && avatarImageManager.shouldShowGoodbye(text)) {
+      console.log('👋 Conversation ending with goodbye phrase - switching to goodbye image');
+      const newState = avatarImageManager.updateImageState(sessionId, 'goodbye');
+      if (newState) {
+        socket.emit('avatar-image-changed', {
+          imagePath: newState.imagePath,
+          state: newState.currentState
+        });
+        imageChanged = true;
+      }
+    }
+  } else if (scenario === 'coffee-spill') {
+    // Check if Pedro's emotion has softened
+    if (avatarImageManager.hasPedroSoftened(session.transcript)) {
+      const currentState = avatarImageManager.getSessionState(sessionId);
+      if (currentState && currentState.currentState === 'angry') {
+        console.log('😊 Pedro emotion softened - switching to happy image');
+        const newState = avatarImageManager.updateImageState(sessionId, 'happy');
+        if (newState) {
+          socket.emit('avatar-image-changed', {
+            imagePath: newState.imagePath,
+            state: newState.currentState
+          });
+          imageChanged = true;
+        }
+      }
+    }
+  }
+
   // Emit AI response to client
   socket.emit('ai-speaking', { text });
 
@@ -338,7 +369,7 @@ async function handleAIResponse(socket, sessionId, text, scenario) {
     state: 'talking'
   });
 
-  // ALWAYS use ElevenLabs for audio (as requested)
+  // ALWAYS use ElevenLabs for audio
   await playElevenLabsAudio(socket, text, scenario);
 
   // Estimate speaking duration and return to idle
@@ -356,135 +387,45 @@ async function handleAIResponse(socket, sessionId, text, scenario) {
   }, speakingDuration);
 }
 
-// Handle AI response WITH HeyGen streaming avatar
-async function handleAIResponseWithHeyGen(socket, sessionId, text, scenario) {
-  const session = sessionManager.getSession(sessionId);
-  if (!session) return;
-
-  // Set speaking lock to prevent interruptions
-  aiSpeakingLock.set(sessionId, true);
-  console.log('🔒 AI speaking lock SET (HeyGen)');
-
-  // Add AI message to transcript
-  const timestamp = new Date().toLocaleTimeString();
-  sessionManager.addToTranscript(sessionId, {
-    speaker: 'ai',
-    text,
-    timestamp
-  });
-
-  console.log('🤖 AI Response (with HeyGen):', text);
-
-  // Emit AI response to client
-  socket.emit('ai-speaking', { text });
-
-  // Update avatar state (switch to talking)
-  socket.emit('avatar-state', {
-    state: 'talking'
-  });
-
-  // Check if WebRTC handshake is complete
-  const heygenSession = activeHeyGenSessions.get(sessionId);
-  
-  try {
-    if (heygenSession && heygenSession.webrtcReady) {
-      // WebRTC is ready - use HeyGen avatar
-      console.log('🎬 Sending text to HeyGen avatar...');
-      const result = await heygenService.speakWithAvatar(sessionId, text);
-      
-      if (result && !result.error) {
-        console.log('✅ HeyGen avatar speaking');
-      } else {
-        console.warn('⚠️ HeyGen speaking failed, falling back to audio');
-        await playElevenLabsAudio(socket, text, scenario);
-      }
-    } else {
-      // WebRTC not ready yet - use regular audio
-      console.log('⏳ HeyGen WebRTC not ready yet, using audio fallback');
-      await playElevenLabsAudio(socket, text, scenario);
-    }
-  } catch (error) {
-    console.error('❌ Error with HeyGen avatar:', error);
-    // Fallback to regular audio
-    await playElevenLabsAudio(socket, text, scenario);
-  }
-
-  // Estimate speaking duration and return to idle
-  const speakingDuration = text.length * 50; // Rough estimate: 50ms per character
-  setTimeout(() => {
-    socket.emit('avatar-state', {
-      state: 'idle'
-    });
-    
-    // Clear speaking lock after AI finishes + 1 second buffer
-    setTimeout(() => {
-      aiSpeakingLock.set(sessionId, false);
-      console.log('🔓 AI speaking lock RELEASED (HeyGen)');
-    }, 1000);
-  }, speakingDuration);
-}
-
-// Streaming version: ElevenLabs → HeyGen → Frontend
-async function handleAIResponseStreaming(socket, sessionId, text, scenario) {
-  const session = sessionManager.getSession(sessionId);
-  if (!session) return;
-
-  // Add AI message to transcript
-  const timestamp = new Date().toLocaleTimeString();
-  sessionManager.addToTranscript(sessionId, {
-    speaker: 'ai',
-    text,
-    timestamp
-  });
-
-  console.log('🤖 AI Response (streaming):', text);
-
-  // Emit AI response to client
-  socket.emit('ai-speaking', { text });
-
-  // Update avatar state (switch to talking)
-  socket.emit('avatar-state', {
-    state: 'talking'
-  });
-
-  // Send text to ElevenLabs streaming TTS
-  const ttsStream = activeTTSStreams.get(sessionId);
-  if (ttsStream && ttsStream.send) {
-    console.log('📤 Sending text to ElevenLabs stream...');
-    ttsStream.send(text);
-    
-    // Estimate speaking duration and return to idle
-    const speakingDuration = text.length * 50;
-    setTimeout(() => {
-      socket.emit('avatar-state', {
-        state: 'idle'
-      });
-    }, speakingDuration);
-  } else {
-    console.warn('⚠️ No active TTS stream, falling back to regular audio');
-    await playElevenLabsAudio(socket, text, scenario);
-  }
-}
-
 // Helper function to play ElevenLabs audio
 async function playElevenLabsAudio(socket, text, scenario = 'introduction') {
+  console.log('🔊 Requesting TTS for:', text.substring(0, 50) + '...');
   const audioBuffer = await ttsService.textToSpeech(text, scenario);
   if (audioBuffer) {
-    console.log('Sending ElevenLabs audio to client, size:', audioBuffer.length);
-    socket.emit('ai-audio', { audio: Array.from(new Uint8Array(audioBuffer)) });
+    console.log('✅ TTS generated successfully, size:', audioBuffer.length, 'bytes');
+    const audioArray = Array.from(new Uint8Array(audioBuffer));
+    console.log('📤 Sending audio to client, array length:', audioArray.length);
+    socket.emit('ai-audio', { audio: audioArray });
+    console.log('✅ Audio emitted to client');
   } else {
-    console.warn('No audio buffer generated from TTS service');
+    console.error('❌ No audio buffer generated from TTS service - TTS may have failed!');
   }
 }
 
-async function endSession(socket, sessionId) {
+async function endSession(socket, sessionId, retryCount = 0) {
   const session = sessionManager.getSession(sessionId);
   if (!session) return;
+
+  // Check if AI is still speaking - if so, wait a bit longer (max 3 retries = 6 seconds)
+  if (aiSpeakingLock.get(sessionId) && retryCount < 3) {
+    console.log(`⏳ AI still speaking - delaying session end by 2 seconds (attempt ${retryCount + 1}/3)`);
+    setTimeout(() => {
+      endSession(socket, sessionId, retryCount + 1);
+    }, 2000);
+    return;
+  }
 
   console.log('🛑 Ending session:', sessionId);
 
   // Clear speaking lock
   aiSpeakingLock.delete(sessionId);
+  
+  // Clear any pending silence timers
+  if (silenceTimers.has(sessionId)) {
+    clearTimeout(silenceTimers.get(sessionId));
+    silenceTimers.delete(sessionId);
+  }
+  pendingTranscripts.delete(sessionId);
   
   // Stop live transcription
   const transcription = activeTranscriptions.get(sessionId);
@@ -493,21 +434,8 @@ async function endSession(socket, sessionId) {
   }
   activeTranscriptions.delete(sessionId);
 
-  // Close ElevenLabs TTS stream
-  const ttsStream = activeTTSStreams.get(sessionId);
-  if (ttsStream && ttsStream.close) {
-    console.log('🔌 Closing ElevenLabs TTS stream...');
-    ttsStream.close();
-  }
-  activeTTSStreams.delete(sessionId);
-
-  // Close HeyGen streaming session properly
-  const heygenSession = activeHeyGenSessions.get(sessionId);
-  if (heygenSession) {
-    console.log('🔌 Closing HeyGen session:', heygenSession.session_id);
-    await heygenService.stopStreamingSession(sessionId);
-  }
-  activeHeyGenSessions.delete(sessionId);
+  // Clear avatar image state
+  avatarImageManager.clearSession(sessionId);
 
   // Generate feedback
   const feedback = await feedbackService.generateFeedback(

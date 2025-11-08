@@ -27,7 +27,7 @@ function LandingPage() {
   return (
     <div className="landing-page">
       <div className="landing-content">
-        <h1 className="landing-title">SocialGym</h1>
+        <h1 className="landing-title">BanterBox</h1>
         <p className="landing-subtitle">Train Your Conversation Skills</p>
 
         <div className="scenarios-grid">

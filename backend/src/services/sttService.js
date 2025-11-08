@@ -64,7 +64,7 @@ class STTService {
         // Don't specify encoding - let Deepgram auto-detect from WebM container
         // The browser sends WebM which contains Opus, but Deepgram needs to unwrap it
         channels: 1,
-        endpointing: 5000,  // Wait 5 seconds of silence before finalizing (allows natural thinking pauses)
+        endpointing: false,  // Disable Deepgram's automatic endpointing - we handle silence detection manually
         vad_events: true,  // Voice activity detection
       });
 

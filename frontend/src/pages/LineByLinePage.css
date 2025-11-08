@@ -1,7 +1,7 @@
 .line-by-line-page {
   min-height: 100vh;
   padding: 100px 40px 120px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #000000 0%, #1a1a2e 50%, #0f3460 100%);
 }
 
 .line-by-line-content {
@@ -19,9 +19,9 @@
 }
 
 .transcript-container {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(10px);
-  border: 2px solid rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(0, 102, 204, 0.3);
   border-radius: 20px;
   padding: 30px;
   margin-bottom: 40px;
@@ -33,15 +33,15 @@
   margin-bottom: 24px;
   padding: 20px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.4);
 }
 
 .transcript-entry.user {
-  border-left: 4px solid #38ef7d;
+  border-left: 4px solid #0099ff;
 }
 
 .transcript-entry.ai {
-  border-left: 4px solid #667eea;
+  border-left: 4px solid #0066cc;
 }
 
 .message-header {
@@ -76,9 +76,10 @@
   align-items: flex-start;
   gap: 10px;
   padding: 12px;
-  background: rgba(56, 239, 125, 0.15);
+  background: rgba(0, 153, 255, 0.15);
   border-radius: 8px;
   margin-top: 12px;
+  border-left: 2px solid #0099ff;
 }
 
 .feedback-icon {
@@ -116,7 +117,7 @@
   padding: 16px 48px;
   font-size: 18px;
   font-weight: 700;
-  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+  background: linear-gradient(135deg, #0066cc 0%, #0099ff 100%);
   color: white;
   border: none;
   border-radius: 50px;
@@ -129,7 +130,7 @@
 
 .back-home-button:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(17, 153, 142, 0.4);
+  box-shadow: 0 6px 20px rgba(0, 153, 255, 0.6);
 }
 
 /* Scrollbar styling */
@@ -138,15 +139,15 @@
 }
 
 .transcript-container::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.3);
   border-radius: 10px;
 }
 
 .transcript-container::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(0, 102, 204, 0.5);
   border-radius: 10px;
 }
 
 .transcript-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(0, 153, 255, 0.8);
 }

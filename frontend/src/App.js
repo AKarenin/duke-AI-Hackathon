@@ -4,12 +4,14 @@ import LandingPage from './pages/LandingPage';
 import ConversationPage from './pages/ConversationPage';
 import FeedbackPage from './pages/FeedbackPage';
 import LineByLinePage from './pages/LineByLinePage';
+import Logo from './components/Logo';
 import './App.css';
 
 function App() {
   return (
     <Router>
       <div className="App">
+        <Logo />
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/conversation/:scenario" element={<ConversationPage />} />
